@@ -40,7 +40,7 @@ class ConverterApp:
         """
         self.root = root
         self.root.title("MiniTV Video Converter")
-        self.root.geometry("600x650")
+        self.root.geometry("600x720") # Slightly increased height for the new FPS row
         self.root.resizable(False, False)
         self.input_directory = ""
         self.is_converting = False
@@ -72,6 +72,22 @@ class ConverterApp:
         self.video_option = tk.StringVar(value="288x240")
         tk.Radiobutton(video_options_frame, text="288x240 Display", variable=self.video_option, value="288x240").pack(anchor='w')
         tk.Radiobutton(video_options_frame, text="320x240 Display", variable=self.video_option, value="320x240").pack(anchor='w')
+
+        # FPS Input (Moved above Quality)
+        fps_frame = tk.Frame(video_options_frame)
+        fps_frame.pack(fill=tk.X, pady=(5, 0))
+        tk.Label(fps_frame, text="FPS:").pack(side=tk.LEFT, padx=(18, 5))
+        self.video_fps = tk.StringVar(value="30")
+        tk.Entry(fps_frame, textvariable=self.video_fps, width=5).pack(side=tk.LEFT)
+        tk.Label(fps_frame, text="(Suggest using 30FPS for 288 & 24FPS for 320)").pack(side=tk.LEFT, padx=(5, 0))
+
+        # Quality Input
+        quality_frame = tk.Frame(video_options_frame)
+        quality_frame.pack(fill=tk.X, pady=(5, 0))
+        tk.Label(quality_frame, text="Quality (0-51, lower has better quaility):").pack(side=tk.LEFT, padx=(18, 5))
+        self.video_quality = tk.StringVar(value="8")
+        tk.Entry(quality_frame, textvariable=self.video_quality, width=5).pack(side=tk.LEFT)
+        tk.Label(quality_frame, text="(Default: 8 but dont vary too much either side)").pack(side=tk.LEFT, padx=(5, 0))
 
         # Audio Options
         audio_options_frame = ttk.LabelFrame(self.options_frame, text="Audio Output Options", padding=(10, 5))
@@ -137,7 +153,25 @@ class ConverterApp:
             self.log_message(f"Selected directory: {self.input_directory}")
 
     def start_conversion_thread(self):
-        """Disables the start button and starts the conversion and timer threads."""
+        """Validates inputs and starts the conversion threads."""
+        # Validate Quality Input
+        try:
+            q_val = int(self.video_quality.get())
+            if not (0 <= q_val <= 51):
+                raise ValueError
+        except ValueError:
+            messagebox.showerror("Invalid Input", "Video Quality must be a number between 0 and 51.")
+            return
+
+        # Validate FPS Input
+        try:
+            fps_val = int(self.video_fps.get())
+            if fps_val <= 0:
+                raise ValueError
+        except ValueError:
+            messagebox.showerror("Invalid Input", "FPS must be a positive number.")
+            return
+
         self.start_button.config(state=tk.DISABLED)
         self.stop_button.config(state=tk.NORMAL)
         self.browse_button.config(state=tk.DISABLED)
@@ -154,7 +188,7 @@ class ConverterApp:
         timer_thread.start()
         
     def request_stop(self):
-        """Requests to stop the conversion process after confirmation, using OS-specific commands."""
+        """Requests to stop the conversion process after confirmation."""
         if messagebox.askyesno("Confirm Stop", "Are you sure you want to stop the conversion?\nThe current file will be cancelled immediately."):
             self.stop_requested = True
             self.log_message("\n--- STOP REQUESTED BY USER ---")
@@ -162,20 +196,16 @@ class ConverterApp:
                 self.log_message(f"Forcefully terminating FFmpeg process (PID: {self.current_process.pid})...")
                 try:
                     if platform.system() == "Windows":
-                        # Use taskkill on Windows to terminate the process and its children (/T) forcefully (/F).
                         subprocess.run(
                             f"taskkill /PID {self.current_process.pid} /F /T",
                             check=True, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                             creationflags=subprocess.CREATE_NO_WINDOW
                         )
                     else:
-                        # Use kill on Unix-like systems (macOS, Linux)
-                        os.kill(self.current_process.pid, 9) # 9 is SIGKILL for forceful termination
+                        os.kill(self.current_process.pid, 9)
                     self.log_message("Process terminated.")
                 except (subprocess.CalledProcessError, OSError) as e:
-                    self.log_message(f"Could not terminate process (it may have already finished): {e}")
-                except Exception as e:
-                    self.log_message(f"An error occurred while trying to terminate the process: {e}")
+                    self.log_message(f"Could not terminate process: {e}")
             self.stop_button.config(state=tk.DISABLED)
 
     def update_timer(self):
@@ -206,16 +236,14 @@ class ConverterApp:
                 if self.stop_requested:
                     self.log_message("\nConversion process stopped by user.")
                     break
-                
                 self.process_file(filename)
             
             if not self.stop_requested:
                 end_time = time.time()
                 total_duration = end_time - start_time
                 duration_str = time.strftime("%M minutes and %S seconds", time.gmtime(total_duration))
-                
                 self.log_message(f"\n--- Conversion Process Finished in {duration_str} ---")
-                messagebox.showinfo("Success", f"All video conversions are complete!\nTotal time taken: {duration_str}")
+                messagebox.showinfo("Success", f"All video conversions are complete!\nTotal time: {duration_str}")
 
         except Exception as e:
             self.log_message(f"An error occurred: {e}")
@@ -250,9 +278,8 @@ class ConverterApp:
                 return 'error'
             else:
                 return 'success'
-
         except Exception as e:
-            self.log_message(f"An exception occurred while running FFmpeg: {e}")
+            self.log_message(f"An exception occurred: {e}")
             return 'error'
         finally:
             self.current_process = None
@@ -263,72 +290,48 @@ class ConverterApp:
         file_basename = os.path.splitext(filename)[0]
         output_dir = os.path.join(self.input_directory, file_basename)
         
-        video_choice = self.video_option.get()
-        audio_format_choice = self.audio_format.get()
-        audio_volume_choice = self.audio_volume.get().strip()
+        v_res = self.video_option.get()
+        a_fmt = self.audio_format.get()
+        v_qual = self.video_quality.get()
+        v_fps = self.video_fps.get().strip()
+        a_vol = self.audio_volume.get().strip()
 
-        if video_choice == "320x240":
-            video_output_filename = "320_30fps.mjpeg"
-        else:
-            video_output_filename = "288_30fps.mjpeg"
+        v_out_name = f"{v_res.split('x')[0]}_{v_fps}fps.mjpeg"
+        a_out_name = f"44100.{a_fmt}"
             
-        if audio_format_choice == "mp3":
-            audio_output_filename = "44100.mp3"
-        else:
-            audio_output_filename = "44100.aac"
-            
-        video_output_path = os.path.join(output_dir, video_output_filename)
-        audio_output_path = os.path.join(output_dir, audio_output_filename)
+        v_path = os.path.join(output_dir, v_out_name)
+        a_path = os.path.join(output_dir, a_out_name)
 
-        if os.path.exists(video_output_path) or os.path.exists(audio_output_path):
-            msg = f"Output files for '{filename}' already exist. Do you want to overwrite?"
-            if not messagebox.askyesno("Overwrite Confirmation", msg):
-                self.log_message(f"\nSkipping '{filename}' as requested.")
+        if os.path.exists(v_path) or os.path.exists(a_path):
+            if not messagebox.askyesno("Overwrite?", f"Files for {filename} exist. Overwrite?"):
+                self.log_message(f"Skipping {filename}")
                 return
 
         self.log_message(f"\nProcessing: {filename}")
-
-        try:
-            os.makedirs(output_dir, exist_ok=True)
-        except OSError as e:
-            self.log_message(f"Error creating directory {output_dir}: {e}")
-            return
+        os.makedirs(output_dir, exist_ok=True)
             
         # --- 1. Video Conversion ---
-        if video_choice == "320x240":
-            video_args = '-vf "scale=320:240:force_original_aspect_ratio=increase,crop=320:240" -q:v 8'
-        else:
-            video_args = '-vf "scale=288:240:force_original_aspect_ratio=increase,crop=288:240" -q:v 8'
+        res_colon = v_res.replace('x', ':')
+        vf = f"scale={res_colon}:force_original_aspect_ratio=increase,crop={res_colon},eq=brightness=-0.05"
         
-        self.log_message(f"Starting video conversion ({video_choice})...")
-        video_command = f'"{FFMPEG_EXE}" -i "{input_filepath}" {video_args} -y "{video_output_path}"'
+        self.log_message(f"Starting video conversion ({v_res}, Quality: {v_qual}, FPS: {v_fps})...")
+        v_cmd = f'"{FFMPEG_EXE}" -i "{input_filepath}" -vf "{vf}" -q:v {v_qual} -r {v_fps} -y "{v_path}"'
         
-        status = self.run_ffmpeg_command(video_command, filename)
-        if status == 'success':
-            self.log_message(f"Video successfully converted to {video_output_path}")
-        else:
-            shutil.rmtree(output_dir, ignore_errors=True)
-            self.log_message(f"Cleaned up partial files for '{filename}'.")
+        status = self.run_ffmpeg_command(v_cmd, filename)
+        if status != 'success':
+            if not self.stop_requested: shutil.rmtree(output_dir, ignore_errors=True)
             return
 
         # --- 2. Audio Conversion ---
-        if audio_format_choice == "mp3":
-            audio_codec_args = "-ab 32k"
-        else:
-            audio_codec_args = "-ab 24k"
+        codec = "-ab 32k" if a_fmt == "mp3" else "-ab 24k"
+        af = f'loudnorm=i=-20:lra=10,volume={a_vol}'
         
-        audio_filter_args = f'-af "loudnorm=i=-20:lra=10,volume={audio_volume_choice}"'
-        
-        self.log_message(f"Starting audio conversion ({audio_format_choice.upper()} at {audio_volume_choice})...")
-        audio_command = f'"{FFMPEG_EXE}" -i "{input_filepath}" -vn -ar 44100 -ac 1 {audio_codec_args} {audio_filter_args} -y "{audio_output_path}"'
+        self.log_message(f"Starting audio conversion ({a_fmt.upper()})...")
+        a_cmd = f'"{FFMPEG_EXE}" -i "{input_filepath}" -vn -ar 44100 -ac 1 {codec} -af "{af}" -y "{a_path}"'
 
-        status = self.run_ffmpeg_command(audio_command, filename)
-        if status == 'success':
-            self.log_message(f"Audio successfully converted to {audio_output_path}")
-        else:
-            shutil.rmtree(output_dir, ignore_errors=True)
-            self.log_message(f"Cleaned up partial files for '{filename}'.")
-            return
+        status = self.run_ffmpeg_command(a_cmd, filename)
+        if status != 'success':
+            if not self.stop_requested: shutil.rmtree(output_dir, ignore_errors=True)
 
 
 if __name__ == "__main__":
@@ -340,11 +343,14 @@ if __name__ == "__main__":
             popen_kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
         subprocess.run(check_command, check=True, **popen_kwargs)
     except (subprocess.CalledProcessError, FileNotFoundError):
+        # We use a basic root for the error message since the app hasn't started
+        temp_root = tk.Tk()
+        temp_root.withdraw()
         messagebox.showerror(
             "FFmpeg Not Found",
-            f"Could not find or run '{FFMPEG_EXE}'.\n\nPlease make sure the FFmpeg executable is in the same directory as this script, or that it is in your system's PATH."
+            f"Could not find or run '{FFMPEG_EXE}'.\n\nPlease ensure it is in the same folder as this script or in your PATH."
         )
-        exit()
+        sys.exit()
 
     main_root = tk.Tk()
     app = ConverterApp(main_root)
