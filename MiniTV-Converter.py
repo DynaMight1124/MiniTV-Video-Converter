@@ -40,7 +40,7 @@ class ConverterApp:
         """
         self.root = root
         self.root.title("MiniTV Video Converter")
-        self.root.geometry("600x720") # Slightly increased height for the new FPS row
+        self.root.geometry("600x850")
         self.root.resizable(False, False)
         self.input_directory = ""
         self.is_converting = False
@@ -79,12 +79,12 @@ class ConverterApp:
         tk.Label(fps_frame, text="FPS:").pack(side=tk.LEFT, padx=(18, 5))
         self.video_fps = tk.StringVar(value="30")
         tk.Entry(fps_frame, textvariable=self.video_fps, width=5).pack(side=tk.LEFT)
-        tk.Label(fps_frame, text="(Suggest using 30FPS for 288 & 24FPS for 320)").pack(side=tk.LEFT, padx=(5, 0))
+        tk.Label(fps_frame, text="(Note: 30 for 288, 24 for 320)").pack(side=tk.LEFT, padx=(5, 0))
 
         # Quality Input
         quality_frame = tk.Frame(video_options_frame)
         quality_frame.pack(fill=tk.X, pady=(5, 0))
-        tk.Label(quality_frame, text="Quality (0-51, lower has better quaility):").pack(side=tk.LEFT, padx=(18, 5))
+        tk.Label(quality_frame, text="Quality (0-51, lower is better):").pack(side=tk.LEFT, padx=(18, 5))
         self.video_quality = tk.StringVar(value="8")
         tk.Entry(quality_frame, textvariable=self.video_quality, width=5).pack(side=tk.LEFT)
         tk.Label(quality_frame, text="(Default: 8 but dont vary too much either side)").pack(side=tk.LEFT, padx=(5, 0))
@@ -104,6 +104,24 @@ class ConverterApp:
         tk.Entry(volume_frame, textvariable=self.audio_volume, width=10).pack(side=tk.LEFT)
         tk.Label(volume_frame, text="(e.g., -8dB is quieter than -5dB)").pack(side=tk.LEFT, padx=(5, 0))
 
+        # Output Naming & Folder Options
+        naming_frame = ttk.LabelFrame(self.options_frame, text="Output Naming & Folder Options", padding=(10, 5))
+        naming_frame.pack(fill=tk.X, pady=5)
+
+        self.naming_mode = tk.StringVar(value="legacy")
+        tk.Radiobutton(naming_frame, text="Legacy Naming (e.g. 288_30fps.mjpeg & 44100.aac in subfolders)", variable=self.naming_mode, value="legacy", command=self.update_naming_state).pack(anchor='w')
+        tk.Radiobutton(naming_frame, text="Match Original Filename (e.g. video.mjpeg & video.aac)", variable=self.naming_mode, value="match", command=self.update_naming_state).pack(anchor='w')
+
+        self.folder_options_frame = tk.Frame(naming_frame)
+        self.folder_options_frame.pack(fill=tk.X, padx=20, pady=(5, 0))
+        
+        self.folder_mode = tk.StringVar(value="subfolder")
+        self.rb_subfolder = tk.Radiobutton(self.folder_options_frame, text="Output to a new subfolder for each file", variable=self.folder_mode, value="subfolder")
+        self.rb_subfolder.pack(anchor='w')
+        self.rb_samedir = tk.Radiobutton(self.folder_options_frame, text="Output all files into a 'Converted' folder", variable=self.folder_mode, value="same_dir")
+        self.rb_samedir.pack(anchor='w')
+
+        self.update_naming_state()
 
         # --- Controls and Status ---
         self.control_frame = tk.Frame(root, padx=10, pady=5)
@@ -139,6 +157,16 @@ class ConverterApp:
         self.log_text.configure(state='disabled')
         self.log_text.see(tk.END)
         self.root.update_idletasks()
+
+    def update_naming_state(self):
+        """Enables or disables folder options based on naming mode."""
+        if self.naming_mode.get() == "legacy":
+            self.rb_subfolder.config(state=tk.DISABLED)
+            self.rb_samedir.config(state=tk.DISABLED)
+            self.folder_mode.set("subfolder")
+        else:
+            self.rb_subfolder.config(state=tk.NORMAL)
+            self.rb_samedir.config(state=tk.NORMAL)
 
     def browse_directory(self):
         """Opens a dialog to select the input directory."""
@@ -288,16 +316,26 @@ class ConverterApp:
         """Processes a single video file based on the selected GUI options."""
         input_filepath = os.path.join(self.input_directory, filename)
         file_basename = os.path.splitext(filename)[0]
-        output_dir = os.path.join(self.input_directory, file_basename)
         
         v_res = self.video_option.get()
         a_fmt = self.audio_format.get()
         v_qual = self.video_quality.get()
         v_fps = self.video_fps.get().strip()
         a_vol = self.audio_volume.get().strip()
+        naming = self.naming_mode.get()
+        folder_setting = self.folder_mode.get()
 
-        v_out_name = f"{v_res.split('x')[0]}_{v_fps}fps.mjpeg"
-        a_out_name = f"44100.{a_fmt}"
+        if naming == "legacy":
+            v_out_name = f"{v_res.split('x')[0]}_{v_fps}fps.mjpeg"
+            a_out_name = f"44100.{a_fmt}"
+            output_dir = os.path.join(self.input_directory, file_basename)
+        else:
+            v_out_name = f"{file_basename}.mjpeg"
+            a_out_name = f"{file_basename}.{a_fmt}"
+            if folder_setting == "subfolder":
+                output_dir = os.path.join(self.input_directory, file_basename)
+            else:
+                output_dir = os.path.join(self.input_directory, "Converted")
             
         v_path = os.path.join(output_dir, v_out_name)
         a_path = os.path.join(output_dir, a_out_name)
