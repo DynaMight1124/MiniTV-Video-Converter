@@ -18,7 +18,8 @@ Theres also a python version, which *should* work on other operating systems or 
 Theres a few options too, video options depending on the screen you're using and also sound depending on whether your version is setup for AAC or MP3. Theres also a volume adjustment as a lot of these Mini TV's dont have volume adjustment. -5 is louder than -8 so do a few tests as it might depend on your setup/speaker!
 
 
-<img width="749" height="851" alt="image" src="https://github.com/user-attachments/assets/b03abc25-063b-43af-877b-7dd5781662b2" />
+<img width="749" height="1102" alt="image" src="https://github.com/user-attachments/assets/4bc7932c-fdee-4251-9e3d-846912052522" />
+
 
 
 
