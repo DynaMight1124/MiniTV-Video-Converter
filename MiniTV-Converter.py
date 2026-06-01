@@ -7,59 +7,79 @@ import sys
 import time
 import shutil
 import platform
+import urllib.request
 
 # --- Configuration ---
 # You can easily change the accepted file formats here.
-ACCEPTED_FORMATS = ('.avi', '.mp4', '.mkv')
+ACCEPTED_FORMATS = ('.avi', '.mp4', '.mkv', '.webm')
 
 # --- End of Configuration ---
 
-def get_ffmpeg_path():
-    """
-    Determines the path to the ffmpeg executable, accommodating PyInstaller and different OS.
-    """
-    executable_name = "ffmpeg.exe" if platform.system() == "Windows" else "ffmpeg"
-    
+def get_base_dir():
+    """Returns the directory where the script or the built .exe is located."""
     if getattr(sys, 'frozen', False):
-        # If the application is run as a bundle (e.g., by PyInstaller)
+        return os.path.dirname(sys.executable)
+    else:
+        return os.path.dirname(os.path.abspath(__file__))
+
+def get_ffmpeg_path():
+    """Determines the path to the ffmpeg executable."""
+    executable_name = "ffmpeg.exe" if platform.system() == "Windows" else "ffmpeg"
+    if getattr(sys, 'frozen', False):
         return os.path.join(sys._MEIPASS, executable_name)
     else:
-        # If run as a normal Python script
         return executable_name
+
+def get_ytdlp_path():
+    """Determines the path to the yt-dlp executable (unbundled, in the same folder)."""
+    executable_name = "yt-dlp.exe" if platform.system() == "Windows" else "yt-dlp"
+    return os.path.join(get_base_dir(), executable_name)
 
 FFMPEG_EXE = get_ffmpeg_path()
 
 
 class ConverterApp:
     """
-    A GUI application for converting video files using FFmpeg.
+    A GUI application for converting video files using FFmpeg and grabbing them via yt-dlp.
     """
     def __init__(self, root):
-        """
-        Initializes the main application window.
-        """
         self.root = root
         self.root.title("MiniTV Video Converter")
         self.root.geometry("600x850")
-        self.root.resizable(False, False)
+        self.root.resizable(True, True)
         self.input_directory = ""
         self.is_converting = False
         self.stop_requested = False
-        self.current_process = None # To hold the running FFmpeg process
+        self.current_process = None 
 
         # --- UI Elements ---
-        # Frame for directory selection
-        self.dir_frame = tk.Frame(root, padx=10, pady=10)
-        self.dir_frame.pack(fill=tk.X)
+        
+        # 1. Frame for directory selection
+        self.dir_frame = tk.Frame(root, padx=10)
+        self.dir_frame.pack(fill=tk.X, pady=(10, 5))
 
         self.dir_label = tk.Label(self.dir_frame, text="Video Directory:")
         self.dir_label.pack(side=tk.LEFT, padx=(0, 5))
 
-        self.dir_entry = tk.Entry(self.dir_frame, state='readonly', width=60)
+        self.dir_entry = tk.Entry(self.dir_frame, state='readonly', width=50)
         self.dir_entry.pack(side=tk.LEFT, expand=True, fill=tk.X)
 
         self.browse_button = tk.Button(self.dir_frame, text="Browse...", command=self.browse_directory)
         self.browse_button.pack(side=tk.LEFT, padx=(5, 0))
+
+        # 2. Frame for yt-dlp URL entry
+        self.url_frame = tk.Frame(root, padx=10)
+        self.url_frame.pack(fill=tk.X, pady=(0, 10))
+
+        tk.Label(self.url_frame, text="Video URL:").pack(side=tk.LEFT, padx=(0, 23)) # Alignment padding
+        self.url_entry = tk.Entry(self.url_frame, width=40)
+        self.url_entry.pack(side=tk.LEFT, expand=True, fill=tk.X)
+
+        self.grab_button = tk.Button(self.url_frame, text="Grab", command=self.start_grab_thread)
+        self.grab_button.pack(side=tk.LEFT, padx=(5, 5))
+
+        self.ytdlp_btn = tk.Button(self.url_frame, text="Download yt-dlp", command=self.start_ytdlp_download)
+        self.ytdlp_btn.pack(side=tk.LEFT, padx=(0, 0))
 
         # --- Conversion Options ---
         self.options_frame = tk.Frame(root, padx=10, pady=5)
@@ -70,10 +90,10 @@ class ConverterApp:
         video_options_frame.pack(fill=tk.X, pady=5)
         
         self.video_option = tk.StringVar(value="288x240")
-        tk.Radiobutton(video_options_frame, text="288x240 Display", variable=self.video_option, value="288x240").pack(anchor='w')
-        tk.Radiobutton(video_options_frame, text="320x240 Display", variable=self.video_option, value="320x240").pack(anchor='w')
+        tk.Radiobutton(video_options_frame, text="288x240 Display", variable=self.video_option, value="288x240", command=self.update_default_fps).pack(anchor='w')
+        tk.Radiobutton(video_options_frame, text="320x240 Display", variable=self.video_option, value="320x240", command=self.update_default_fps).pack(anchor='w')
 
-        # FPS Input (Moved above Quality)
+        # FPS Input 
         fps_frame = tk.Frame(video_options_frame)
         fps_frame.pack(fill=tk.X, pady=(5, 0))
         tk.Label(fps_frame, text="FPS:").pack(side=tk.LEFT, padx=(18, 5))
@@ -108,7 +128,7 @@ class ConverterApp:
         naming_frame = ttk.LabelFrame(self.options_frame, text="Output Naming & Folder Options", padding=(10, 5))
         naming_frame.pack(fill=tk.X, pady=5)
 
-        self.naming_mode = tk.StringVar(value="legacy")
+        self.naming_mode = tk.StringVar(value="match")
         tk.Radiobutton(naming_frame, text="Legacy Naming (e.g. 288_30fps.mjpeg & 44100.aac in subfolders)", variable=self.naming_mode, value="legacy", command=self.update_naming_state).pack(anchor='w')
         tk.Radiobutton(naming_frame, text="Match Original Filename (e.g. video.mjpeg & video.aac)", variable=self.naming_mode, value="match", command=self.update_naming_state).pack(anchor='w')
 
@@ -122,6 +142,7 @@ class ConverterApp:
         self.rb_samedir.pack(anchor='w')
 
         self.update_naming_state()
+        self.check_ytdlp_state() # Check for yt-dlp on startup
 
         # --- Controls and Status ---
         self.control_frame = tk.Frame(root, padx=10, pady=5)
@@ -158,6 +179,115 @@ class ConverterApp:
         self.log_text.see(tk.END)
         self.root.update_idletasks()
 
+    def update_default_fps(self):
+        """Automatically updates the FPS based on the chosen resolution."""
+        if self.video_option.get() == "288x240":
+            self.video_fps.set("30")
+        elif self.video_option.get() == "320x240":
+            self.video_fps.set("24")
+
+    def check_ytdlp_state(self):
+        """Enables or disables URL features based on the presence of yt-dlp."""
+        ytdlp_exists = os.path.exists(get_ytdlp_path())
+        if platform.system() == "Windows":
+            if ytdlp_exists:
+                self.ytdlp_btn.config(text="Update yt-dlp", state=tk.NORMAL)
+                self.url_entry.config(state=tk.NORMAL)
+                self.grab_button.config(state=tk.NORMAL)
+            else:
+                self.ytdlp_btn.config(text="Download yt-dlp", state=tk.NORMAL)
+                self.url_entry.config(state=tk.DISABLED)
+                self.grab_button.config(state=tk.DISABLED)
+        else:
+            if ytdlp_exists:
+                self.ytdlp_btn.config(text="yt-dlp Ready", state=tk.DISABLED)
+                self.url_entry.config(state=tk.NORMAL)
+                self.grab_button.config(state=tk.NORMAL)
+            else:
+                self.ytdlp_btn.config(text="yt-dlp Missing", state=tk.DISABLED)
+                self.url_entry.config(state=tk.DISABLED)
+                self.grab_button.config(state=tk.DISABLED)
+
+    def start_ytdlp_download(self):
+        """Starts a thread to download/update yt-dlp.exe."""
+        self.ytdlp_btn.config(state=tk.DISABLED)
+        self.log_message("Starting yt-dlp download. Please wait...")
+        threading.Thread(target=self.download_ytdlp_thread, daemon=True).start()
+
+    def download_ytdlp_thread(self):
+        """Downloads the latest Windows binary from the yt-dlp GitHub release."""
+        url = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe"
+        try:
+            urllib.request.urlretrieve(url, get_ytdlp_path())
+            self.root.after(0, lambda: self.log_message("yt-dlp.exe downloaded/updated successfully!"))
+        except Exception as e:
+            self.root.after(0, lambda: self.log_message(f"Error downloading yt-dlp: {e}"))
+            self.root.after(0, lambda: messagebox.showerror("Download Error", f"Could not download yt-dlp. Please check your internet connection or try manually.\n\nError: {e}"))
+        finally:
+            self.root.after(0, self.check_ytdlp_state)
+
+    def start_grab_thread(self):
+        """Validates inputs and starts the yt-dlp download thread."""
+        if not self.input_directory:
+            messagebox.showerror("Error", "Please select a Video Directory first. This is where the downloaded video will be saved.")
+            return
+            
+        url = self.url_entry.get().strip()
+        if not url:
+            messagebox.showerror("Error", "Please enter a valid video URL.")
+            return
+
+        self.grab_button.config(state=tk.DISABLED)
+        threading.Thread(target=self.run_grab, args=(url,), daemon=True).start()
+
+    def run_grab(self, url):
+        """Executes the yt-dlp command to download the video."""
+        self.root.after(0, lambda: self.log_message("\n--- Starting yt-dlp download ---"))
+        self.root.after(0, lambda: self.log_message(f"URL: {url}"))
+        
+        # Limit to 720p or lower, force output format to mp4, and ensure yt-dlp can use our bundled ffmpeg for merging
+        cmd = [
+            get_ytdlp_path(), 
+            "--newline", 
+            "--ffmpeg-location", FFMPEG_EXE,
+            "-f", "bestvideo[height<=720]+bestaudio/best[height<=720]/best",
+            "--merge-output-format", "mp4",
+            "-P", self.input_directory, 
+            url
+        ]
+        
+        popen_kwargs = {
+            'stdout': subprocess.PIPE,
+            'stderr': subprocess.STDOUT,
+            'text': True,
+            'bufsize': 1 
+        }
+        if platform.system() == "Windows":
+            popen_kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
+            
+        try:
+            process = subprocess.Popen(cmd, **popen_kwargs)
+            for line in process.stdout:
+                # Capture and stream yt-dlp's standard output directly to the log box safely
+                self.root.after(0, lambda l=line.strip(): self.log_message(l) if l else None)
+            
+            process.wait()
+            
+            if process.returncode == 0:
+                self.root.after(0, lambda: self.log_message("--- Download Complete ---"))
+                self.root.after(0, self.prompt_convert_after_download)
+            else:
+                self.root.after(0, lambda: self.log_message("--- Download Failed ---"))
+        except Exception as e:
+            self.root.after(0, lambda e=e: self.log_message(f"Error running yt-dlp: {e}"))
+        finally:
+            self.root.after(0, lambda: self.grab_button.config(state=tk.NORMAL))
+
+    def prompt_convert_after_download(self):
+        """Asks the user if they want to immediately begin converting files."""
+        if messagebox.askyesno("Download Complete", "Video downloaded successfully!\n\nDo you want to start converting the files in the directory using the current settings?"):
+            self.start_conversion_thread()
+
     def update_naming_state(self):
         """Enables or disables folder options based on naming mode."""
         if self.naming_mode.get() == "legacy":
@@ -182,7 +312,6 @@ class ConverterApp:
 
     def start_conversion_thread(self):
         """Validates inputs and starts the conversion threads."""
-        # Validate Quality Input
         try:
             q_val = int(self.video_quality.get())
             if not (0 <= q_val <= 51):
@@ -191,7 +320,6 @@ class ConverterApp:
             messagebox.showerror("Invalid Input", "Video Quality must be a number between 0 and 51.")
             return
 
-        # Validate FPS Input
         try:
             fps_val = int(self.video_fps.get())
             if fps_val <= 0:
@@ -248,7 +376,7 @@ class ConverterApp:
     def run_conversion(self):
         """The main conversion logic that finds files and runs FFmpeg."""
         start_time = time.time()
-        self.log_message("--- Starting Conversion Process ---")
+        self.log_message("\n--- Starting Conversion Process ---")
         
         try:
             video_files = [f for f in os.listdir(self.input_directory) if f.lower().endswith(ACCEPTED_FORMATS)]
@@ -381,12 +509,11 @@ if __name__ == "__main__":
             popen_kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
         subprocess.run(check_command, check=True, **popen_kwargs)
     except (subprocess.CalledProcessError, FileNotFoundError):
-        # We use a basic root for the error message since the app hasn't started
         temp_root = tk.Tk()
         temp_root.withdraw()
         messagebox.showerror(
             "FFmpeg Not Found",
-            f"Could not find or run '{FFMPEG_EXE}'.\n\nPlease ensure it is in the same folder as this script or in your PATH."
+            f"Could not find or run '{FFMPEG_EXE}'.\n\nPlease ensure it is bundled or in the same folder as this script."
         )
         sys.exit()
 
